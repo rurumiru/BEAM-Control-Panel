@@ -40,6 +40,7 @@ HTTP_PORT="${PORT:-4000}"
 DOMAIN="${DOMAIN:-}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+LE_EMAIL="${LE_EMAIL:-}"
 
 INSTALL_NGINX=1
 INSTALL_LETSENCRYPT=0
@@ -62,6 +63,7 @@ BEAM Control Panel — установщик
   --port <port>          порт приложения (по умолчанию 4000)
   --admin-email <email>  e-mail администратора
   --admin-password <pw>  пароль администратора (иначе будет сгенерирован)
+  --email <email>        e-mail для Let's Encrypt (по умолчанию --admin-email)
   --db-password <pw>     пароль пользователя PostgreSQL
   --source <dir>         каталог с исходниками (по умолчанию — текущий репозиторий)
   --no-nginx             не устанавливать и не настраивать nginx
@@ -78,6 +80,7 @@ while [ $# -gt 0 ]; do
     --port)           HTTP_PORT="$2"; shift 2 ;;
     --admin-email)    ADMIN_EMAIL="$2"; shift 2 ;;
     --admin-password) ADMIN_PASSWORD="$2"; shift 2 ;;
+    --email)          LE_EMAIL="$2"; shift 2 ;;
     --db-password)    DB_PASSWORD="$2"; shift 2 ;;
     --source)         SOURCE_DIR="$2"; shift 2 ;;
     --no-nginx)       INSTALL_NGINX=0; shift ;;
@@ -90,6 +93,25 @@ while [ $# -gt 0 ]; do
 done
 
 trap 'echo; fail "ошибка на строке $LINENO"' ERR
+
+# Проверяем параметры до установки пакетов и сборки релиза: узнать про
+# неправильный e-mail через десять минут работы скрипта — плохой сценарий.
+valid_email() {
+  printf '%s' "$1" | grep -qE '^[^@[:space:]]+@[^@[:space:]]+\.[A-Za-z]{2,}$'
+}
+
+if [ "$INSTALL_LETSENCRYPT" -eq 1 ]; then
+  [ -n "$DOMAIN" ] || fail "--letsencrypt требует --domain"
+
+  LE_EMAIL="${LE_EMAIL:-$ADMIN_EMAIL}"
+
+  if ! valid_email "$LE_EMAIL"; then
+    fail "Let's Encrypt отклонит адрес «$LE_EMAIL».
+Укажите настоящий e-mail: --email you@example.com
+(или запустите без --letsencrypt и выпустите сертификат позже:
+ certbot --nginx -d $DOMAIN -m you@example.com --agree-tos)"
+  fi
+fi
 
 [ "$(id -u)" -eq 0 ] || fail "запустите скрипт от root: sudo bash $0"
 
@@ -120,10 +142,47 @@ fi
 ARCH="$(dpkg --print-architecture)"
 info "архитектура: $ARCH"
 
+# Ubuntu запускает unattended-upgrades в фоне и держит блокировку dpkg —
+# без ожидания установка падает с "Could not get lock /var/lib/dpkg/lock-frontend".
+apt_locked() {
+  if have fuser; then
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock \
+      >/dev/null 2>&1
+  else
+    # psmisc may not be installed yet on a truly minimal image
+    pgrep -f '(unattended-upgrade|apt-get|aptitude|/usr/bin/dpkg)' >/dev/null 2>&1
+  fi
+}
+
+wait_for_apt() {
+  local waited=0 limit=300
+
+  while apt_locked; do
+    [ "$waited" -eq 0 ] && warn "apt занят другим процессом (обычно unattended-upgrades), ждём…"
+
+    sleep 5
+    waited=$((waited + 5))
+
+    if [ "$waited" -ge "$limit" ]; then
+      warn "ждём уже ${limit}с — продолжаем; если apt-get упадёт по блокировке, выполните:"
+      warn "  sudo systemctl stop unattended-upgrades && sudo dpkg --configure -a"
+      break
+    fi
+  done
+
+  [ "$waited" -eq 0 ] || info "apt освободился через ${waited}с"
+}
+
 APT_UPDATED=0
-apt_update_once() { [ "$APT_UPDATED" -eq 1 ] || { apt-get update -qq; APT_UPDATED=1; }; }
+apt_update_once() {
+  [ "$APT_UPDATED" -eq 1 ] && return 0
+  wait_for_apt
+  apt-get update -qq
+  APT_UPDATED=1
+}
 apt_install() {
   apt_update_once
+  wait_for_apt
   apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
 }
 
@@ -150,7 +209,7 @@ else
   INSTALLED=0
 
   if curl -fsSL https://binaries2.erlang-solutions.com/GPG-KEY-pmanager.asc 2>/dev/null \
-      | gpg --dearmor -o "$ESL_KEY" 2>/dev/null; then
+      | gpg --batch --yes --dearmor -o "$ESL_KEY" 2>/dev/null; then
     echo "deb [signed-by=$ESL_KEY] https://binaries2.erlang-solutions.com/ubuntu/ ${UBUNTU_CODENAME}-esl-erlang-${OTP_VERSION} contrib" \
       > "$ESL_LIST"
     APT_UPDATED=0
@@ -171,35 +230,70 @@ else
 fi
 
 have erl || fail "Erlang не установился"
-info "OTP $(current_otp)"
+
+ACTUAL_OTP="$(current_otp)"
+info "установлен OTP $ACTUAL_OTP"
+
+if [ -n "$ACTUAL_OTP" ] && [ "$ACTUAL_OTP" != "$OTP_VERSION" ]; then
+  warn "запрошен OTP $OTP_VERSION, доступен только $ACTUAL_OTP"
+  warn "Elixir будет поставлен в сборке под OTP $ACTUAL_OTP — это рабочая конфигурация"
+  OTP_VERSION="$ACTUAL_OTP"
+fi
 
 # -------------------------------------------------------------------- elixir
 
 step "Elixir $ELIXIR_VERSION"
 
 OTP_MAJOR="$(current_otp)"
+MARKER="/usr/local/elixir/.beam-panel-build"
+WANT="${ELIXIR_VERSION}-otp-${OTP_MAJOR}"
 
-if [ "$(elixir --short-version 2>/dev/null || true)" = "$ELIXIR_VERSION" ]; then
-  info "уже установлен"
+# Elixir ships one build per OTP major; a build made for another OTP produces
+# .beam files the running VM refuses to load. The marker records which pair is
+# installed so a changed OTP always triggers a reinstall.
+elixir_healthy() {
+  [ "$(cat "$MARKER" 2>/dev/null)" = "$WANT" ] || return 1
+  elixir -e 'IO.puts(:erlang.system_info(:otp_release))' >/dev/null 2>&1
+}
+
+if elixir_healthy; then
+  info "уже установлен ($WANT)"
 else
   TMP="$(mktemp -d)"
   URL="https://github.com/elixir-lang/elixir/releases/download/v${ELIXIR_VERSION}/elixir-otp-${OTP_MAJOR}.zip"
+  info "качаем elixir-otp-${OTP_MAJOR}.zip (v${ELIXIR_VERSION})"
 
   if curl -fsSL -o "$TMP/elixir.zip" "$URL"; then
     rm -rf /usr/local/elixir
     mkdir -p /usr/local/elixir
     unzip -qo "$TMP/elixir.zip" -d /usr/local/elixir
     for b in elixir elixirc iex mix; do ln -sf "/usr/local/elixir/bin/$b" "/usr/local/bin/$b"; done
+    printf '%s' "$WANT" > "$MARKER"
     info "установлен из официальной сборки под OTP $OTP_MAJOR"
   else
-    warn "сборка под OTP $OTP_MAJOR недоступна — ставим elixir из репозитория Ubuntu"
+    warn "сборка Elixir ${ELIXIR_VERSION} под OTP ${OTP_MAJOR} недоступна"
+    warn "ставим elixir из репозитория Ubuntu (версия может быть старее)"
     apt_install elixir
   fi
   rm -rf "$TMP"
 fi
 
 have mix || fail "Elixir не установился"
-info "Elixir $(elixir --short-version)"
+
+# Проверяем, что связка Elixir+OTP действительно рабочая, до долгой сборки.
+if ! elixir -e 'IO.puts(:erlang.system_info(:otp_release))' >/dev/null 2>&1; then
+  fail "Elixir не запускается на установленном OTP ${OTP_MAJOR}.
+Удалите /usr/local/elixir и запустите установщик снова, либо укажите
+подходящую версию: --elixir <версия> --otp ${OTP_MAJOR}"
+fi
+
+ELIXIR_MINOR="$(elixir --short-version | cut -d. -f1,2)"
+case "$ELIXIR_MINOR" in
+  1.1[89]|1.2*) : ;;
+  *) fail "нужен Elixir 1.18 или новее, установлен $(elixir --short-version)" ;;
+esac
+
+info "Elixir $(elixir --short-version) на OTP $OTP_MAJOR"
 
 # ------------------------------------------------------------------- node.js
 
@@ -244,6 +338,13 @@ else
   sudo -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
   info "база ${DB_NAME} создана"
 fi
+
+# На PostgreSQL 15+ схема public закрыта для всех, кроме владельца БД, а база
+# могла быть создана раньше с другим владельцем — выравниваем права явно.
+sudo -u postgres psql -q -c "ALTER DATABASE ${DB_NAME} OWNER TO ${DB_USER};" >/dev/null
+sudo -u postgres psql -q -d "${DB_NAME}" -c "GRANT ALL ON SCHEMA public TO ${DB_USER};" >/dev/null
+sudo -u postgres psql -q -d "${DB_NAME}" -c "ALTER SCHEMA public OWNER TO ${DB_USER};" >/dev/null 2>&1 || true
+info "права на базу выданы роли ${DB_USER}"
 
 # ------------------------------------------------------------------ app user
 
@@ -383,25 +484,49 @@ info "юнит /etc/systemd/system/${SERVICE_NAME}.service"
 
 step "Права на управление сервером"
 
+# Панель — это средство администрирования сервера: она создаёт каталоги
+# деплоя, ставит пакеты, пишет systemd-юниты, управляет службами и читает
+# журналы. Все эти действия выполняются как `sudo -n bash -lc '<команда>'`,
+# поэтому список отдельных бинарников не работает — нужен полный NOPASSWD.
+# Права внутри панели ограничены ролями (viewer / operator / admin), каждое
+# действие пишется в аудит.
 cat > "/etc/sudoers.d/90-beam-panel" <<SUDOEOF
-# Панель управляет службами и читает журналы на локальном сервере
-${APP_USER} ALL=(ALL) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/journalctl, /usr/bin/journalctl, /usr/bin/apt-get, /usr/bin/install, /bin/mkdir, /bin/chown, /bin/ln
+# BEAM Control Panel — управление локальным сервером без запроса пароля.
+# Удалите этот файл, если панель не должна администрировать основной сервер;
+# управление удалёнными узлами по SSH продолжит работать.
+${APP_USER} ALL=(ALL) NOPASSWD: ALL
 SUDOEOF
 chmod 440 /etc/sudoers.d/90-beam-panel
-info "выданы права sudo (systemctl, journalctl, apt-get)"
+visudo -cf /etc/sudoers.d/90-beam-panel >/dev/null || fail "sudoers-файл получился некорректным"
+
+# Проверяем, что беспарольный sudo действительно работает — именно на этом
+# спотыкались деплой и провижининг основного сервера.
+if sudo -u "$APP_USER" sudo -n true 2>/dev/null; then
+  info "беспарольный sudo для ${APP_USER} работает"
+else
+  warn "sudo -n для ${APP_USER} не работает — деплой на основной сервер будет падать"
+  warn "проверьте /etc/sudoers.d/90-beam-panel и что в /etc/sudoers есть #includedir /etc/sudoers.d"
+fi
 
 # --------------------------------------------------------------------- start
 
 step "Запуск"
 
-systemctl restart "${SERVICE_NAME}"
-sleep 3
+# `|| true`: без этого ERR-trap срабатывает раньше, чем мы покажем журнал,
+# и оператор видит только "ошибка на строке N".
+systemctl restart "${SERVICE_NAME}" || true
+sleep 4
 
 if systemctl is-active --quiet "${SERVICE_NAME}"; then
   info "служба запущена"
 else
-  journalctl -u "${SERVICE_NAME}" -n 40 --no-pager || true
-  fail "служба не запустилась — см. журнал выше"
+  echo
+  warn "служба не запустилась, последние 60 строк журнала:"
+  echo "------------------------------------------------------------------"
+  journalctl -u "${SERVICE_NAME}" -n 60 --no-pager 2>&1 | sed 's/^/  /' || true
+  echo "------------------------------------------------------------------"
+  echo
+  fail "запуск не удался — журнал выше. Полный вывод: journalctl -xeu ${SERVICE_NAME}"
 fi
 
 # --------------------------------------------------------------------- admin
@@ -415,10 +540,31 @@ else
   GENERATED_PASSWORD=0
 fi
 
-sudo -u "$APP_USER" env $(grep -v '^#' "$ENV_FILE" | xargs -d '\n') \
-  "$APP_HOME/current/bin/$APP_NAME" eval \
-  "BeamPanel.Release.create_admin(\"${ADMIN_EMAIL}\", \"${ADMIN_PASSWORD}\")" || \
-  warn "не удалось создать администратора автоматически — воспользуйтесь мастером /setup"
+# Значения в env-файле содержат base64 с +/= и могут содержать пробелы —
+# читаем их через `source`, а не через `xargs`, и передаём поимённо.
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+
+ADMIN_CREATED=0
+
+if sudo -u "$APP_USER" \
+     DATABASE_URL="$DATABASE_URL" \
+     SECRET_KEY_BASE="$SECRET_KEY_BASE" \
+     BEAM_PANEL_CLOAK_KEY="$BEAM_PANEL_CLOAK_KEY" \
+     PHX_HOST="${PHX_HOST:-localhost}" \
+     PORT="${PORT:-$HTTP_PORT}" \
+     RELEASE_DISTRIBUTION=none \
+     HOME="/home/$APP_USER" \
+     "$APP_HOME/current/bin/$APP_NAME" eval \
+     "BeamPanel.Release.create_admin(\"${ADMIN_EMAIL}\", \"${ADMIN_PASSWORD}\")"; then
+  ADMIN_CREATED=1
+else
+  GENERATED_PASSWORD=0
+  warn "не удалось создать администратора автоматически"
+  warn "создайте его через мастер первого запуска: /setup"
+fi
 
 # --------------------------------------------------------------------- nginx
 
@@ -471,8 +617,15 @@ NGINXEOF
   if [ "$INSTALL_LETSENCRYPT" -eq 1 ]; then
     [ -n "$DOMAIN" ] || fail "--letsencrypt требует --domain"
     have certbot || apt_install certbot python3-certbot-nginx
-    certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$ADMIN_EMAIL" --redirect \
-      || warn "не удалось выпустить сертификат — проверьте DNS и повторите: certbot --nginx -d $DOMAIN"
+    if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+         -m "$LE_EMAIL" --no-eff-email --redirect; then
+      info "сертификат выпущен, HTTPS включён"
+      CERT_ISSUED=1
+    else
+      warn "не удалось выпустить сертификат"
+      warn "убедитесь, что A-запись $DOMAIN указывает на этот сервер, затем повторите:"
+      warn "  certbot --nginx -d $DOMAIN -m $LE_EMAIL --agree-tos --no-eff-email --redirect"
+    fi
   fi
 fi
 
@@ -488,9 +641,11 @@ fi
 
 # -------------------------------------------------------------------- итоги
 
+CERT_ISSUED="${CERT_ISSUED:-0}"
+
 PUBLIC_URL="http://$(hostname -I 2>/dev/null | awk '{print $1}'):${HTTP_PORT}"
 [ -n "$DOMAIN" ] && PUBLIC_URL="http://${DOMAIN}"
-[ "$INSTALL_LETSENCRYPT" -eq 1 ] && PUBLIC_URL="https://${DOMAIN}"
+[ "$CERT_ISSUED" -eq 1 ] && PUBLIC_URL="https://${DOMAIN}"
 
 cat <<SUMMARY
 
@@ -500,7 +655,8 @@ cat <<SUMMARY
 
   URL              ${PUBLIC_URL}
   Администратор    ${ADMIN_EMAIL}
-$( [ "$GENERATED_PASSWORD" -eq 1 ] && echo "  Пароль           ${ADMIN_PASSWORD}" )
+$( [ "$GENERATED_PASSWORD" -eq 1 ] && [ "$ADMIN_CREATED" -eq 1 ] && echo "  Пароль           ${ADMIN_PASSWORD}" )
+$( [ "$ADMIN_CREATED" -eq 0 ] && echo "  Первый вход      откройте ${PUBLIC_URL}/setup и создайте администратора" )
 
   Служба           systemctl status ${SERVICE_NAME}
   Журнал           journalctl -u ${SERVICE_NAME} -f

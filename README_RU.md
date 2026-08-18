@@ -53,6 +53,7 @@ sudo bash scripts/install-ubuntu.sh --domain panel.example.com --letsencrypt
 --port <port>            порт приложения (по умолчанию 4000)
 --admin-email <email>    e-mail администратора
 --admin-password <pw>    пароль (иначе сгенерируется и будет напечатан)
+--email <email>          e-mail для Let's Encrypt (по умолчанию --admin-email)
 --no-nginx               без nginx
 --letsencrypt            выпустить сертификат (требует --domain)
 --otp 27 --elixir 1.18.4 версии тулчейна
@@ -94,11 +95,11 @@ ssh root@node 'bash /tmp/bootstrap-node.sh'
 mix setup                # зависимости, БД, ассеты
 mix run priv/repo/seeds.exs
 mix phx.server           # http://localhost:4000
-mix test                 # 121 тест
+mix test                 # 127 тестов
 mix precommit            # компиляция без warnings + формат + тесты
 ```
 
-Требуется Elixir 1.17+, Erlang/OTP 26+, PostgreSQL 14+.
+Требуется Elixir 1.18+, Erlang/OTP 25+, PostgreSQL 14+.
 
 ---
 
@@ -161,6 +162,11 @@ curl -X POST -H "Authorization: Bearer bcp_..." \
   **Потеря ключа = потеря доступа к SSH-ключам и env проектов** — храните его с бэкапами.
 * Роли: `admin` (всё, включая пользователей и удалённую консоль), `operator`
   (деплой, рестарт, провижининг), `viewer` (только чтение).
+* Установщик выдаёт пользователю `beampanel` беспарольный `sudo` на локальном
+  сервере (`/etc/sudoers.d/90-beam-panel`). Это необходимо: панель создаёт
+  каталоги деплоя, пишет systemd-юниты, управляет службами и ставит пакеты.
+  Если панель не должна администрировать основной сервер — удалите этот файл,
+  управление удалёнными узлами по SSH продолжит работать.
 * Каждое изменяющее действие пишется в аудит с указанием пользователя и IP.
 * Удалённое выполнение кода на ноде (`OTP → Консоль`) доступно только администраторам.
 * Панель ставит себя за nginx; в проде обязательно включите HTTPS.

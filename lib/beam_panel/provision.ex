@@ -187,7 +187,7 @@ defmodule BeamPanel.Provision do
   end
 
   defp broadcast(run, message),
-    do: Phoenix.PubSub.broadcast(BeamPanel.PubSub, topic(run), message)
+    do: BeamPanel.Broadcast.publish(topic(run), message)
 
   defp log_key(%ProvisionRun{id: id}), do: {:provision, id}
 

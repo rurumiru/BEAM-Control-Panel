@@ -183,7 +183,7 @@ defmodule BeamPanel.Deploy do
 
         log = fn line ->
           LogStore.append(deployment.id, line)
-          Phoenix.PubSub.broadcast(BeamPanel.PubSub, topic(deployment), {:deploy_log, line})
+          BeamPanel.Broadcast.publish(topic(deployment), {:deploy_log, line})
         end
 
         log.("↩ Откат на #{target}")
@@ -233,7 +233,7 @@ defmodule BeamPanel.Deploy do
           result: if(status == "rolled_back", do: :ok, else: :error)
         )
 
-        Phoenix.PubSub.broadcast(BeamPanel.PubSub, topic(deployment), {:deploy_status, status})
+        BeamPanel.Broadcast.publish(topic(deployment), {:deploy_status, status})
 
         {:ok, deployment}
     end

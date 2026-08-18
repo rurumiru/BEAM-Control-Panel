@@ -18,11 +18,11 @@ defmodule BeamPanel.Servers do
   def topic(id) when is_integer(id), do: "server:#{id}"
 
   defp broadcast(event, payload) do
-    Phoenix.PubSub.broadcast(BeamPanel.PubSub, @topic, {event, payload})
+    BeamPanel.Broadcast.publish(@topic, {event, payload})
   end
 
   defp broadcast_to(server, event, payload) do
-    Phoenix.PubSub.broadcast(BeamPanel.PubSub, topic(server), {event, payload})
+    BeamPanel.Broadcast.publish(topic(server), {event, payload})
   end
 
   ## ------------------------------------------------------------------ queries

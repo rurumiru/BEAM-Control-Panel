@@ -85,6 +85,7 @@ defmodule BeamPanel.Projects.Project do
     |> BeamPanel.Slug.put_slug(:name)
     |> put_defaults()
     |> validate_required([:deploy_path, :release_name, :service_name])
+    |> validate_deploy_path()
     |> unique_constraint(:slug, name: :projects_server_id_slug_index)
     |> foreign_key_constraint(:server_id)
   end
@@ -104,6 +105,60 @@ defmodule BeamPanel.Projects.Project do
     |> put_default(:deploy_path, fn -> "/opt/beam/#{slug}" end)
     |> put_default(:node_name, fn -> "#{String.replace(slug || "", "-", "_")}@127.0.0.1" end)
     |> normalize_service_name()
+    |> normalize_deploy_path()
+  end
+
+  # `/opt/beam/app/` and `/opt/beam//app` both mean the same directory; store one
+  # canonical form so generated units, symlinks and `rm -rf` targets are stable.
+  defp normalize_deploy_path(changeset) do
+    case get_field(changeset, :deploy_path) do
+      path when is_binary(path) ->
+        normalized =
+          path
+          |> String.trim()
+          |> String.replace(~r{/+}, "/")
+          |> String.trim_trailing("/")
+
+        put_change(changeset, :deploy_path, normalized)
+
+      _ ->
+        changeset
+    end
+  end
+
+  # Directories the deploy pipeline would happily `mkdir`, `chown -R` and later
+  # prune releases inside. A project must own its own subdirectory.
+  @reserved_paths ~w(/ /bin /boot /dev /etc /home /lib /opt /opt/beam /proc /root
+                     /run /sbin /srv /sys /tmp /usr /usr/local /var /var/www)
+
+  defp validate_deploy_path(changeset) do
+    case get_field(changeset, :deploy_path) do
+      nil ->
+        changeset
+
+      path ->
+        cond do
+          not String.starts_with?(path, "/") ->
+            add_error(changeset, :deploy_path, "must be an absolute path, e.g. /opt/beam/my-app")
+
+          path in @reserved_paths ->
+            add_error(
+              changeset,
+              :deploy_path,
+              "is a system directory — give the project its own subdirectory, e.g. #{path}/#{get_field(changeset, :slug) || "app"}"
+            )
+
+          length(Path.split(path)) < 3 ->
+            add_error(
+              changeset,
+              :deploy_path,
+              "must be at least two levels deep, e.g. /opt/beam/my-app"
+            )
+
+          true ->
+            changeset
+        end
+    end
   end
 
   defp put_default(changeset, field, fun) do

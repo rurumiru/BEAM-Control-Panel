@@ -74,12 +74,31 @@ sudo -u "$APP_USER" env \
     mix release --overwrite --path '$NEW_RELEASE'
   "
 
+step "Права на управление сервером"
+
+# Обновляем правило sudo: старые установки выдавали доступ к списку бинарников,
+# из-за чего деплой и провижининг основного сервера падали с
+# "sudo: no password was provided".
+cat > "/etc/sudoers.d/90-beam-panel" <<SUDOEOF
+# BEAM Control Panel — управление локальным сервером без запроса пароля.
+${APP_USER} ALL=(ALL) NOPASSWD: ALL
+SUDOEOF
+chmod 440 /etc/sudoers.d/90-beam-panel
+visudo -cf /etc/sudoers.d/90-beam-panel >/dev/null || fail "sudoers-файл некорректен"
+
+if sudo -u "$APP_USER" sudo -n true 2>/dev/null; then
+  info "беспарольный sudo для ${APP_USER} работает"
+else
+  warn "sudo -n для ${APP_USER} не работает — деплой на основной сервер будет падать"
+fi
+
 step "Переключение"
 PREVIOUS="$(readlink -f "$APP_HOME/current" 2>/dev/null || true)"
 ln -sfn "$NEW_RELEASE" "$APP_HOME/current"
 chown -h "$APP_USER:$APP_USER" "$APP_HOME/current"
 
-systemctl restart "$SERVICE_NAME"
+# `|| true`: иначе set -e прервёт скрипт до того, как мы покажем журнал и откатимся
+systemctl restart "$SERVICE_NAME" || true
 sleep 4
 
 if systemctl is-active --quiet "$SERVICE_NAME"; then

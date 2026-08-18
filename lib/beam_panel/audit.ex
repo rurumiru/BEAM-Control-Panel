@@ -29,7 +29,7 @@ defmodule BeamPanel.Audit do
       |> AuditLog.changeset(attrs)
       |> Repo.insert()
 
-    Phoenix.PubSub.broadcast(BeamPanel.PubSub, @topic, {:audit_log, log})
+    BeamPanel.Broadcast.publish(@topic, {:audit_log, log})
     log
   end
 

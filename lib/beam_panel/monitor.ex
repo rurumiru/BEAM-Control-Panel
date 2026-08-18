@@ -47,12 +47,17 @@ defmodule BeamPanel.Monitor do
   def start_server(%{monitor_enabled: false}), do: :ignored
 
   def start_server(server) do
-    if not start_collectors?() do
-      :ignored
-    else
-      do_start_server(server)
+    cond do
+      not start_collectors?() -> :ignored
+      not supervisor_running?() -> :ignored
+      true -> do_start_server(server)
     end
   end
+
+  # Release tasks run with only the repository started, so the monitor tree
+  # simply is not there — every entry point must tolerate that.
+  defp supervisor_running?,
+    do: is_pid(Process.whereis(BeamPanel.Monitor.DynamicSupervisor))
 
   defp do_start_server(server) do
     case DynamicSupervisor.start_child(BeamPanel.Monitor.DynamicSupervisor, {Collector, server}) do
@@ -64,6 +69,14 @@ defmodule BeamPanel.Monitor do
 
   @doc "Stops the collector for `server`."
   def stop_server(server) do
+    if not supervisor_running?() do
+      :ok
+    else
+      do_stop_server(server)
+    end
+  end
+
+  defp do_stop_server(server) do
     case Registry.lookup(BeamPanel.Monitor.Registry, server.id) do
       [{pid, _}] ->
         DynamicSupervisor.terminate_child(BeamPanel.Monitor.DynamicSupervisor, pid)
@@ -94,5 +107,7 @@ defmodule BeamPanel.Monitor do
   defdelegate series(server_id, limit \\ 120), to: Store
 
   @doc "Whether a collector is currently running for the server."
-  def running?(server_id), do: Registry.lookup(BeamPanel.Monitor.Registry, server_id) != []
+  def running?(server_id) do
+    supervisor_running?() and Registry.lookup(BeamPanel.Monitor.Registry, server_id) != []
+  end
 end

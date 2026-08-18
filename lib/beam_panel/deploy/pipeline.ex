@@ -13,6 +13,14 @@ defmodule BeamPanel.Deploy.Pipeline do
 
   @keep_releases 5
 
+  # The deploy directory does not exist yet on a first deploy, so free space is
+  # measured on the nearest existing parent rather than failing on `df`.
+  @free_space_probe ~S"""
+  d=__PATH__
+  while [ ! -d "$d" ] && [ "$d" != / ]; do d=$(dirname "$d"); done
+  df -Ph "$d" | tail -1 | awk '{print $4" свободно на "$6}'
+  """
+
   @type ctx :: map()
 
   @doc "Returns the steps for the project's kind."
@@ -73,10 +81,12 @@ defmodule BeamPanel.Deploy.Pipeline do
   defp preflight(ctx) do
     %{project: project} = ctx
 
+    free_space =
+      String.replace(@free_space_probe, "__PATH__", Remote.shell_quote(project.deploy_path))
+
     checks = [
       {"git", "command -v git"},
-      {"free space",
-       "df -Pk #{Remote.shell_quote(project.deploy_path)} | tail -1 | awk '{print $4}'"}
+      {"free space", free_space}
     ]
 
     toolchain =

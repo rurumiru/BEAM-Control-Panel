@@ -75,17 +75,12 @@ defmodule BeamPanel.Monitor.Collector do
 
       Store.put(state.server.id, metrics)
 
-      Phoenix.PubSub.broadcast(
-        BeamPanel.PubSub,
+      BeamPanel.Broadcast.publish(
         Servers.topic(state.server),
         {:metrics, state.server.id, metrics}
       )
 
-      Phoenix.PubSub.broadcast(
-        BeamPanel.PubSub,
-        Servers.topic(),
-        {:metrics, state.server.id, metrics}
-      )
+      BeamPanel.Broadcast.publish(Servers.topic(), {:metrics, state.server.id, metrics})
 
       state = maybe_persist(state, metrics)
       state = maybe_mark_online(state)

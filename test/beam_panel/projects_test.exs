@@ -50,6 +50,40 @@ defmodule BeamPanel.ProjectsTest do
       assert errors_on(changeset).slug != []
     end
 
+    test "rejects a deploy path that is a system directory" do
+      server = server_fixture()
+
+      for path <- ["/", "/opt", "/opt/beam", "/usr/local", "/var/www"] do
+        {:error, changeset} =
+          Projects.create_project(%{
+            "server_id" => server.id,
+            "name" => "Bad #{System.unique_integer([:positive])}",
+            "deploy_path" => path
+          })
+
+        assert errors_on(changeset).deploy_path != [],
+               "expected #{path} to be rejected as a deploy path"
+      end
+    end
+
+    test "rejects a relative deploy path" do
+      server = server_fixture()
+
+      {:error, changeset} =
+        Projects.create_project(%{
+          "server_id" => server.id,
+          "name" => "Relative",
+          "deploy_path" => "opt/beam/app"
+        })
+
+      assert "must be an absolute path, e.g. /opt/beam/my-app" in errors_on(changeset).deploy_path
+    end
+
+    test "normalises trailing slashes and duplicate separators" do
+      project = project_fixture(nil, %{"name" => "Slashes", "deploy_path" => "/opt//beam/app/"})
+      assert project.deploy_path == "/opt/beam/app"
+    end
+
     test "the same slug may exist on different servers" do
       project_fixture(server_fixture(), %{"name" => "Shared"})
       assert %Project{} = project_fixture(server_fixture(), %{"name" => "Shared"})

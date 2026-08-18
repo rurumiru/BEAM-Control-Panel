@@ -36,13 +36,15 @@ defmodule BeamPanel.Notifications do
     event = to_string(event)
     message = render(event, payload)
 
-    Repo.all(from c in Channel, where: c.enabled == true)
-    |> Enum.filter(&(&1.events == [] or event in &1.events))
-    |> Enum.each(fn channel ->
-      Task.Supervisor.start_child(BeamPanel.TaskSupervisor, fn ->
-        deliver(channel, event, message, payload)
+    if is_pid(Process.whereis(BeamPanel.TaskSupervisor)) do
+      Repo.all(from c in Channel, where: c.enabled == true)
+      |> Enum.filter(&(&1.events == [] or event in &1.events))
+      |> Enum.each(fn channel ->
+        Task.Supervisor.start_child(BeamPanel.TaskSupervisor, fn ->
+          deliver(channel, event, message, payload)
+        end)
       end)
-    end)
+    end
 
     :ok
   rescue

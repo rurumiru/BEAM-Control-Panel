@@ -53,6 +53,7 @@ Useful flags:
 --port <port>            application port (default 4000)
 --admin-email <email>    administrator e-mail
 --admin-password <pw>    password (generated and printed when omitted)
+--email <email>          e-mail for Let's Encrypt (defaults to --admin-email)
 --no-nginx               skip nginx
 --letsencrypt            issue a certificate (requires --domain)
 --otp 27 --elixir 1.18.4 toolchain versions
@@ -94,11 +95,11 @@ ssh root@node 'bash /tmp/bootstrap-node.sh'
 mix setup                # dependencies, database, assets
 mix run priv/repo/seeds.exs
 mix phx.server           # http://localhost:4000
-mix test                 # 121 tests
+mix test                 # 127 tests
 mix precommit            # warnings-as-errors compile + format + tests
 ```
 
-Requires Elixir 1.17+, Erlang/OTP 26+, PostgreSQL 14+.
+Requires Elixir 1.18+, Erlang/OTP 25+, PostgreSQL 14+.
 
 ---
 
@@ -162,6 +163,11 @@ Tokens are created under **Settings → API tokens** and shown exactly once.
   keep it with your backups.
 * Roles: `admin` (everything, including users and the remote console), `operator`
   (deploy, restart, provision), `viewer` (read-only).
+* The installer grants the `beampanel` user passwordless `sudo` on the local
+  host (`/etc/sudoers.d/90-beam-panel`). This is required: the panel creates
+  deploy directories, writes systemd units, manages services and installs
+  packages. Delete that file if the panel must not administer the main server —
+  managing remote nodes over SSH keeps working.
 * Every mutating action is written to the audit log with the user and IP.
 * Remote code execution on a node (`OTP → Console`) is admin-only.
 * The panel installs itself behind nginx; always enable HTTPS in production.

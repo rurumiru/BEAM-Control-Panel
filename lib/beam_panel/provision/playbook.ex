@@ -183,9 +183,30 @@ defmodule BeamPanel.Provision.Playbook do
       warn "/etc/os-release не найден"
     fi
 
+    # Ubuntu держит блокировку dpkg под unattended-upgrades — ждём её.
+    apt_locked() {
+      if have fuser; then
+        $SUDO fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock >/dev/null 2>&1
+      else
+        pgrep -f '(unattended-upgrade|apt-get|aptitude|/usr/bin/dpkg)' >/dev/null 2>&1
+      fi
+    }
+
+    wait_for_apt() {
+      waited=0
+      while apt_locked; do
+        [ "$waited" -eq 0 ] && warn "apt занят (unattended-upgrades), ждём…"
+        sleep 5
+        waited=$((waited + 5))
+        [ "$waited" -ge 300 ] && { warn "ждём уже 300с, продолжаем"; break; }
+      done
+      [ "$waited" -eq 0 ] || info "apt освободился через ${waited}с"
+    }
+
     APT_UPDATED=0
     apt_update_once() {
       if [ "$APT_UPDATED" -eq 0 ]; then
+        wait_for_apt
         $SUDO apt-get update -qq
         APT_UPDATED=1
       fi
@@ -193,6 +214,7 @@ defmodule BeamPanel.Provision.Playbook do
 
     apt_install() {
       apt_update_once
+      wait_for_apt
       $SUDO apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
     }
 
@@ -285,7 +307,7 @@ defmodule BeamPanel.Provision.Playbook do
       ESL_LIST=/etc/apt/sources.list.d/erlang-solutions.list
       ESL_KEY=/usr/share/keyrings/erlang-solutions.gpg
 
-      if curl -fsSL https://binaries2.erlang-solutions.com/GPG-KEY-pmanager.asc 2>/dev/null | $SUDO gpg --dearmor -o "$ESL_KEY" 2>/dev/null; then
+      if curl -fsSL https://binaries2.erlang-solutions.com/GPG-KEY-pmanager.asc 2>/dev/null | $SUDO gpg --batch --yes --dearmor -o "$ESL_KEY" 2>/dev/null; then
         echo "deb [signed-by=$ESL_KEY] https://binaries2.erlang-solutions.com/ubuntu/ ${UBUNTU_CODENAME}-esl-erlang-${OTP_VERSION} contrib" \\
           | $SUDO tee "$ESL_LIST" >/dev/null
         APT_UPDATED=0
@@ -310,8 +332,13 @@ defmodule BeamPanel.Provision.Playbook do
     """
     OTP_MAJOR="$(erl -noshell -eval 'io:format("~s",[erlang:system_info(otp_release)]), halt().' 2>/dev/null || echo "$OTP_VERSION")"
 
-    if have elixir && [ "$(elixir --short-version 2>/dev/null)" = "$ELIXIR_VERSION" ]; then
-      info "Elixir $ELIXIR_VERSION уже установлен"
+    MARKER=/usr/local/elixir/.beam-panel-build
+    WANT="${ELIXIR_VERSION}-otp-${OTP_MAJOR}"
+
+    # Сборка Elixir привязана к мажорной версии OTP: .beam-файлы, собранные под
+    # другой OTP, виртуальная машина загрузить не сможет. Маркер фиксирует пару.
+    if [ "$(cat "$MARKER" 2>/dev/null)" = "$WANT" ]        && elixir -e 'io:format("")' >/dev/null 2>&1; then
+      info "Elixir $ELIXIR_VERSION (OTP $OTP_MAJOR) уже установлен"
     else
       TMP="$(mktemp -d)"
       ARCHIVE="elixir-otp-${OTP_MAJOR}.zip"
@@ -324,6 +351,7 @@ defmodule BeamPanel.Provision.Playbook do
         for b in elixir elixirc iex mix; do
           $SUDO ln -sf "/usr/local/elixir/bin/$b" "/usr/local/bin/$b"
         done
+        echo "$WANT" | $SUDO tee "$MARKER" >/dev/null
         info "Elixir $ELIXIR_VERSION установлен (сборка под OTP $OTP_MAJOR)"
       else
         warn "precompiled-сборка под OTP $OTP_MAJOR недоступна, ставим elixir из репозитория Ubuntu"

@@ -2,10 +2,11 @@ defmodule BeamPanel.Repo.Migrations.CreateAccounts do
   use Ecto.Migration
 
   def change do
-    execute "CREATE EXTENSION IF NOT EXISTS citext", "DROP EXTENSION IF EXISTS citext"
-
+    # No citext: creating an extension requires superuser, which the panel's
+    # database role deliberately does not have. Emails are normalised to
+    # lowercase in BeamPanel.Accounts.User before they ever reach the database.
     create table(:users) do
-      add :email, :citext, null: false
+      add :email, :string, null: false
       add :name, :string
       add :hashed_password, :string, null: false
       add :role, :string, null: false, default: "viewer"

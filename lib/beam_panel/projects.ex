@@ -20,10 +20,10 @@ defmodule BeamPanel.Projects do
   def topic(id) when is_integer(id), do: "project:#{id}"
 
   defp broadcast(event, payload),
-    do: Phoenix.PubSub.broadcast(BeamPanel.PubSub, @topic, {event, payload})
+    do: BeamPanel.Broadcast.publish(@topic, {event, payload})
 
   defp broadcast_to(project, event, payload),
-    do: Phoenix.PubSub.broadcast(BeamPanel.PubSub, topic(project), {event, payload})
+    do: BeamPanel.Broadcast.publish(topic(project), {event, payload})
 
   ## ------------------------------------------------------------------ queries
 

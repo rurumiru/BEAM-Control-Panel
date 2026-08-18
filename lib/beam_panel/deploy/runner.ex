@@ -208,7 +208,7 @@ defmodule BeamPanel.Deploy.Runner do
   end
 
   defp broadcast(deployment_id, message) do
-    Phoenix.PubSub.broadcast(BeamPanel.PubSub, Deploy.topic(deployment_id), message)
+    BeamPanel.Broadcast.publish(Deploy.topic(deployment_id), message)
   end
 
   defp version_for(%Deployment{inserted_at: nil}), do: timestamp()
