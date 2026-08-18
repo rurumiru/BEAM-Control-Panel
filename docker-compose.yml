@@ -1,0 +1,58 @@
+# BEAM Control Panel — локальный или продакшн-запуск в Docker.
+#
+#   cp .env.example .env
+#   docker compose up -d --build
+#
+# Панель управляет дополнительными серверами по SSH, поэтому контейнеру нужен
+# только исходящий доступ. Приватные ключи хранятся в БД в зашифрованном виде —
+# монтировать ~/.ssh не требуется.
+
+name: beam-control-panel
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-beam_panel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-beam_panel_prod}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-beam_panel} -d ${POSTGRES_DB:-beam_panel_prod}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [panel]
+
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ecto://${POSTGRES_USER:-beam_panel}:${POSTGRES_PASSWORD}@db/${POSTGRES_DB:-beam_panel_prod}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required}
+      BEAM_PANEL_CLOAK_KEY: ${BEAM_PANEL_CLOAK_KEY:?BEAM_PANEL_CLOAK_KEY is required}
+      PHX_HOST: ${PHX_HOST:-localhost}
+      PHX_SERVER: "true"
+      PORT: "4000"
+      POOL_SIZE: ${POOL_SIZE:-10}
+      BEAM_PANEL_METRIC_RETENTION_DAYS: ${BEAM_PANEL_METRIC_RETENTION_DAYS:-14}
+    command: >
+      sh -c "/app/bin/beam_panel eval BeamPanel.Release.setup && /app/bin/beam_panel start"
+    ports:
+      - "${PANEL_PORT:-4000}:4000"
+    networks: [panel]
+
+volumes:
+  pgdata:
+
+networks:
+  panel:
+    driver: bridge

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+cd -P -- "$(dirname -- "$0")"
+exec ./beam_panel eval BeamPanel.Release.setup

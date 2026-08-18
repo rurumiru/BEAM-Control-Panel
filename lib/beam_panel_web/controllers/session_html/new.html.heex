@@ -1,0 +1,46 @@
+<Layouts.auth
+  flash={@flash}
+  subtitle="Панель управления серверами и BEAM-приложениями"
+>
+  <div :if={@error_message} class="alert alert-error mb-4 text-sm">
+    <.icon name="hero-exclamation-triangle" class="size-5" />
+    <span>{@error_message}</span>
+  </div>
+
+  <.form :let={f} for={%{}} as={:user} action={~p"/login"} class="space-y-4">
+    <.input
+      field={f[:email]}
+      type="email"
+      label="E-mail"
+      value={@email}
+      required
+      autocomplete="username"
+      autofocus
+    />
+    <.input
+      field={f[:password]}
+      type="password"
+      label="Пароль"
+      required
+      autocomplete="current-password"
+    />
+
+    <.input
+      :if={assigns[:require_totp]}
+      field={f[:totp_code]}
+      type="text"
+      label="Код двухфакторной аутентификации"
+      inputmode="numeric"
+      autocomplete="one-time-code"
+      placeholder="123456"
+    />
+    <input :if={!assigns[:require_totp]} type="hidden" name="user[totp_code]" value="" />
+
+    <label class="label cursor-pointer justify-start gap-2">
+      <input type="checkbox" name="user[remember_me]" value="true" class="checkbox checkbox-sm" />
+      <span class="label-text text-sm">Запомнить меня на 30 дней</span>
+    </label>
+
+    <button class="btn btn-primary w-full" type="submit">Войти</button>
+  </.form>
+</Layouts.auth>

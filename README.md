@@ -1,384 +1,181 @@
 # BEAM Control Panel
 
-## English
+**A self-hosted control panel for Linux servers with first-class support for the BEAM
+ecosystem (Elixir, Erlang, Phoenix).**
 
-# BEAM Control Panel
+It manages the **main server** (the host it runs on) and any number of **additional
+servers** reached over SSH: discovers projects, collects system and BEAM metrics,
+installs the toolchain on a clean Ubuntu box, and runs the full deployment cycle.
 
-A modern, self-hosted control panel for Linux servers with first-class support for the BEAM ecosystem (Elixir, Erlang, Phoenix).
-
-BEAM Control Panel is designed to simplify deployment, management, monitoring, and maintenance of applications running on the BEAM virtual machine while also providing complete VPS administration from a single interface.
-
-Unlike traditional hosting panels, BEAM Control Panel is built with developers and DevOps engineers in mind, offering deep integration with Elixir, Phoenix, Erlang/OTP, Docker, and modern Linux infrastructure.
-
----
-
-# Vision
-
-Build the best open-source control panel for the BEAM ecosystem.
-
-The goal is to make deploying and managing Elixir/Phoenix applications as simple as deploying a WordPress website in traditional hosting panels.
+[Русский](README_RU.md) · [Implementation plan](docs/PLAN.md)
 
 ---
 
-# Planned Features
+## What works today
 
-## Dashboard
-
-- Real-time server overview
-- CPU, RAM, Swap usage
-- Disk utilization
-- Network traffic
-- System uptime
-- Load average
-- Temperature (where supported)
-- Running services
-- Active users
-- Quick actions
-
----
-
-## Server Management
-
-- Start/Stop/Reboot server
-- System updates
-- Package management
-- Service management
-- Process management
-- Resource monitoring
-- Journal logs
-- Scheduled maintenance
+| Area | Capabilities |
+|---|---|
+| **Servers** | Local main server + SSH-reachable nodes · connectivity checks · OS and toolchain facts · groups/clusters · tags and roles |
+| **Monitoring** | CPU, RAM, swap, disk, network, load average, uptime, process count · live LiveView charts · ETS ring buffer plus PostgreSQL history · circuit breaker for unreachable hosts |
+| **Projects** | Auto-discovery of deployed applications · Phoenix / Elixir release / mix app / Erlang release · encrypted environment variables · systemd unit and env file generation · start/stop/restart · health checks |
+| **Deployment** | 11-step pipeline with live log streaming · release built on the target host · migrations · health check · automatic rollback on failure · manual rollback to any release |
+| **BEAM / OTP** | Schedulers, memory by type, processes, ETS, ports, atoms · supervision tree · application list · distribution and peer nodes · remote console (rpc) |
+| **Provisioning** | Clean Ubuntu 24.04/26.04: Erlang, Elixir, Node, PostgreSQL, nginx, certbot, Docker, ufw, fail2ban, sysctl tuning, swap, deploy user |
+| **Logs** | Live `journalctl` streaming with filter, pause and search |
+| **Security** | Sessions + pbkdf2 · TOTP 2FA · RBAC (admin / operator / viewer) · AES-256-GCM secret encryption · full audit trail · lockout after failed logins |
+| **Integrations** | REST API with scoped bearer tokens · notifications to webhook, Telegram, Slack, Discord, e-mail |
 
 ---
 
-## User Management
+## Quick start on a clean Ubuntu 24.04 / 26.04 server
 
-- Linux users
-- SSH key management
-- Password management
-- Permissions
-- Groups
-- Role-based access control (RBAC)
+```bash
+git clone https://github.com/rurumiru/BEAM-Control-Panel.git
+cd BEAM-Control-Panel
+sudo bash scripts/install-ubuntu.sh --domain panel.example.com --letsencrypt
+```
 
----
+The installer is self-contained and idempotent. It:
 
-## SSH Management
+1. installs dependencies — Erlang/OTP 27, Elixir 1.18, Node.js 22, PostgreSQL, nginx;
+2. creates the `beampanel` system user and `/opt/beam-panel`;
+3. generates `SECRET_KEY_BASE` and the encryption key into `/etc/beam-panel/beam-panel.env`;
+4. creates the PostgreSQL role and database;
+5. builds an OTP release and installs the `beam-panel` systemd unit;
+6. runs migrations and creates the administrator;
+7. configures nginx (and, with the flag, a Let's Encrypt certificate);
+8. generates the SSH key the panel will use to reach managed servers, and prints it.
 
-- SSH configuration
-- Authorized keys
-- Connection history
-- Security recommendations
-- Fail2Ban integration
-- SSH hardening
+Useful flags:
 
----
+```
+--domain <host>          hostname for nginx
+--port <port>            application port (default 4000)
+--admin-email <email>    administrator e-mail
+--admin-password <pw>    password (generated and printed when omitted)
+--no-nginx               skip nginx
+--letsencrypt            issue a certificate (requires --domain)
+--otp 27 --elixir 1.18.4 toolchain versions
+```
 
-## Firewall
+Updating:
 
-- UFW management
-- nftables support
-- Open/Close ports
-- IP whitelist
-- IP blacklist
-- Geo blocking
-- Security profiles
+```bash
+sudo bash scripts/update.sh --pull
+```
 
----
+It dumps the database, builds the new release alongside the old one, flips the
+symlink and **rolls back automatically** if the service fails to come up.
 
-## Domains
+### Docker
 
-- Domain management
-- Virtual Hosts
-- Reverse Proxy
-- Redirects
-- DNS records
-- Wildcard domains
+```bash
+cp .env.example .env
+# fill in POSTGRES_PASSWORD, SECRET_KEY_BASE, BEAM_PANEL_CLOAK_KEY
+docker compose up -d --build
+```
 
----
+### Preparing a managed node
 
-## SSL Certificates
+The panel can install the toolchain on an additional server itself — see
+**Server → Install software**. The same script can be applied by hand:
 
-- Let's Encrypt
-- Automatic renewals
-- Multiple certificates
-- Force HTTPS
-- Certificate monitoring
-
----
-
-## Nginx
-
-- Site management
-- Templates
-- Reverse proxy
-- Static websites
-- Custom configuration
-- Logs
-- Performance tuning
+```bash
+mix beam_panel.gen.bootstrap --all       # refreshes scripts/bootstrap-node.sh
+scp scripts/bootstrap-node.sh root@node:/tmp/
+ssh root@node 'bash /tmp/bootstrap-node.sh'
+```
 
 ---
 
-## Docker
+## Development
 
-- Containers
-- Images
-- Networks
-- Volumes
-- Compose projects
-- Resource usage
-- Logs
-- Restart policies
+```bash
+mix setup                # dependencies, database, assets
+mix run priv/repo/seeds.exs
+mix phx.server           # http://localhost:4000
+mix test                 # 121 tests
+mix precommit            # warnings-as-errors compile + format + tests
+```
 
----
-
-## Databases
-
-- PostgreSQL
-- MySQL/MariaDB
-- Redis
-
-Features:
-
-- Create databases
-- Users
-- Permissions
-- Backups
-- Restore
-- Query monitoring
+Requires Elixir 1.17+, Erlang/OTP 26+, PostgreSQL 14+.
 
 ---
 
-# BEAM Management
+## Architecture
 
-Native support for:
+```
+BeamPanelWeb            LiveView UI + REST API + auth and RBAC
+      │
+BeamPanel.Servers       host inventory, services, system actions
+BeamPanel.Projects      BEAM applications, discovery, env, systemd
+BeamPanel.Deploy        pipeline, runner, rollback, history
+BeamPanel.Provision     Ubuntu playbook, streamed execution
+BeamPanel.Monitor       one GenServer per server, ETS ring, PubSub
+BeamPanel.Beam          OTP introspection via rpc + term_to_binary
+      │
+BeamPanel.Remote        single facade: SSH (OTP :ssh) or local shell
+```
 
-- Erlang/OTP
-- Elixir
-- Phoenix
-- Mix
-- Hex
-- Releases
+Key decisions:
 
-Features:
+* **No agents.** Everything happens over SSH using OTP's built-in `:ssh`
+  application — nothing needs to be installed on managed servers.
+* **Local and remote hosts are indistinguishable** to upper layers:
+  `BeamPanel.Remote` swaps in either an SSH channel or `System.cmd`.
+* **Introspection without screen scraping.** Code runs on the target node through
+  `bin/<release> rpc`, the result comes back as base64 `term_to_binary` and is decoded
+  in `:safe` mode — structured data, not shell output.
+* **Secrets are encrypted at rest.** SSH keys, cookies and project env vars use
+  AES-256-GCM (`cloak_ecto`); the key lives only in the environment.
 
-- Deploy applications
-- Start/Stop
-- Restart
-- Hot upgrades
-- Environment variables
-- Release management
-- Logs
-- Runtime configuration
-
----
-
-## Phoenix Support
-
-- Phoenix application deployment
-- Mix release support
-- Endpoint monitoring
-- Telemetry integration
-- LiveDashboard integration
-- Ecto migrations
-- Asset builds
-- Secrets management
+See [docs/PLAN.md](docs/PLAN.md) for details.
 
 ---
 
-## OTP Monitoring
+## REST API
 
-- Supervision Trees
-- Running Applications
-- Processes
-- Mailboxes
-- Scheduler utilization
-- ETS tables
-- Memory allocators
-- Ports
-- Nodes
-- Distribution status
+```bash
+curl -H "Authorization: Bearer bcp_..." https://panel.example.com/api/v1/status
+curl -H "Authorization: Bearer bcp_..." https://panel.example.com/api/v1/servers
+curl -X POST -H "Authorization: Bearer bcp_..." \
+     https://panel.example.com/api/v1/projects/1/deploy
+```
 
----
+| Method | Path | Scope |
+|---|---|---|
+| GET | `/api/v1/status` | read |
+| GET | `/api/v1/servers` · `/servers/:id` · `/servers/:id/metrics` | read |
+| POST | `/api/v1/servers/:id/check` | deploy |
+| GET | `/api/v1/projects` · `/projects/:id` | read |
+| POST | `/api/v1/projects/:id/deploy` · `/restart` · `/rollback` | deploy |
+| GET | `/api/v1/deployments` · `/deployments/:id` | read |
 
-## Cluster Management
-
-- Multi-node clusters
-- Node discovery
-- Cluster health
-- Distributed Erlang
-- Rolling deployments
-
----
-
-## Background Jobs
-
-Support for:
-
-- Oban
-- Quantum
-- Custom workers
-
-Features:
-
-- Queue monitoring
-- Retry jobs
-- Pause queues
-- Failed jobs
-- Scheduled jobs
-
----
-
-## Monitoring
-
-- Metrics
-- CPU
-- Memory
-- Network
-- Storage
-- Application metrics
-- Custom metrics
-- Dashboards
-
----
-
-## Logging
-
-- Live logs
-- Historical logs
-- Filtering
-- Search
-- Download
-- Log rotation
-
----
-
-## File Manager
-
-- Browser
-- Upload
-- Download
-- Edit
-- Permissions
-- Archive
-- Extract
-
----
-
-## Scheduler
-
-- Cron jobs
-- One-time jobs
-- Scheduled tasks
-- Notifications
-
----
-
-## Backup
-
-- Full server backup
-- Database backup
-- File backup
-- Incremental backup
-- Restore
-- Scheduled backups
-
----
-
-## Notifications
-
-- Email
-- Telegram
-- Discord
-- Slack
-- Webhooks
-
----
-
-## API
-
-- REST API
-- WebSocket API
-- API Keys
-- Tokens
-- OAuth
+Tokens are created under **Settings → API tokens** and shown exactly once.
 
 ---
 
 ## Security
 
-- Two-factor authentication
-- Session management
-- Audit logs
-- Login history
-- Security alerts
-- Rate limiting
+* Every secret in the database is encrypted with `BEAM_PANEL_CLOAK_KEY` (AES-256-GCM).
+  **Losing the key means losing access to stored SSH keys and project env vars** —
+  keep it with your backups.
+* Roles: `admin` (everything, including users and the remote console), `operator`
+  (deploy, restart, provision), `viewer` (read-only).
+* Every mutating action is written to the audit log with the user and IP.
+* Remote code execution on a node (`OTP → Console`) is admin-only.
+* The panel installs itself behind nginx; always enable HTTPS in production.
 
 ---
 
-## Multi Server
+## Roadmap
 
-Manage multiple servers from a single dashboard.
-
-Features:
-
-- Groups
-- Tags
-- Regions
-- Status
-- Health
-- Bulk actions
+File manager · firewall UI · domains and SSL · Docker management · database
+management · backups · Oban/Quantum monitoring · web terminal · hot code upgrade ·
+plugins.
 
 ---
 
-## Plugin System
+## License
 
-Future extension system:
-
-- Custom plugins
-- Themes
-- Integrations
-- Community modules
-
----
-
-# Technology Stack
-
-Backend
-
-- Elixir
-- Phoenix
-- Phoenix LiveView
-- Erlang/OTP
-
-Frontend
-
-- Phoenix LiveView
-- TailwindCSS
-
-Infrastructure
-
-- Docker
-- PostgreSQL
-- Linux
-- Systemd
-
----
-
-# Project Goals
-
-- Open Source
-- Fast
-- Modern
-- Secure
-- Lightweight
-- Developer Friendly
-- Production Ready
-- BEAM First
-
----
-
-# License
-
-MIT License
-
----
-
+MIT

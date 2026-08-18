@@ -1,0 +1,48 @@
+# BEAM Control Panel — systemd unit.
+#
+#   sudo cp deploy/systemd/beam-panel.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now beam-panel
+#
+# Скрипт scripts/install-ubuntu.sh создаёт этот юнит автоматически; файл
+# оставлен для ручной установки и как справочник.
+
+[Unit]
+Description=BEAM Control Panel
+Documentation=https://github.com/rurumiru/BEAM-Control-Panel
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=exec
+User=beampanel
+Group=beampanel
+WorkingDirectory=/opt/beam-panel/current
+EnvironmentFile=/etc/beam-panel/beam-panel.env
+Environment=HOME=/home/beampanel
+
+# Создаёт БД при первом запуске и накатывает миграции
+ExecStartPre=/opt/beam-panel/current/bin/beam_panel eval BeamPanel.Release.setup
+ExecStart=/opt/beam-panel/current/bin/beam_panel start
+ExecStop=/opt/beam-panel/current/bin/beam_panel stop
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=30
+KillMode=mixed
+
+LimitNOFILE=65535
+SyslogIdentifier=beam-panel
+
+# Панель управляет systemd на локальном сервере, поэтому NoNewPrivileges=false
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/opt/beam-panel /var/log/beam-panel
+
+[Install]
+WantedBy=multi-user.target
