@@ -162,6 +162,19 @@ defmodule BeamPanel.Provision.Playbook do
     warn() { printf '\\033[1;33m    ! %s\\033[0m\\n' "$1"; }
     have() { command -v "$1" >/dev/null 2>&1; }
 
+    # Выполнить команду от имени другого пользователя.
+    # Под root переменная $SUDO пустая, поэтому «$SUDO -u postgres psql …»
+    # разворачивалось в «-u: command not found» — отсюда отдельный помощник.
+    as_user() {
+      _as_user_name="$1"; shift
+
+      if [ "$(id -u)" -eq 0 ] && have runuser; then
+        runuser -u "$_as_user_name" -- "$@"
+      else
+        sudo -n -u "$_as_user_name" "$@"
+      fi
+    }
+
     trap 'echo; echo "!! Ошибка на строке $LINENO"; exit 1' ERR
 
     if [ "$(id -u)" -ne 0 ]; then
@@ -391,17 +404,20 @@ defmodule BeamPanel.Provision.Playbook do
 
     $SUDO systemctl enable --now postgresql
 
-    if $SUDO -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1; then
+    if as_user postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1; then
       info "роль ${DB_USER} уже существует"
     else
-      $SUDO -u postgres psql -c "CREATE ROLE ${DB_USER} LOGIN PASSWORD '${DB_PASSWORD}' CREATEDB;"
+      as_user postgres psql -c "CREATE ROLE ${DB_USER} LOGIN PASSWORD '${DB_PASSWORD}' CREATEDB;"
       info "создана роль ${DB_USER}"
     fi
 
-    if $SUDO -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
+    if as_user postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
       info "база ${DB_NAME} уже существует"
     else
-      $SUDO -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
+      as_user postgres createdb -O "${DB_USER}" "${DB_NAME}"
+
+    # Права на схему public: с PostgreSQL 15 они закрыты для всех, кроме владельца.
+    as_user postgres psql -q -d "${DB_NAME}" -c "GRANT ALL ON SCHEMA public TO ${DB_USER};" >/dev/null 2>&1 || true
       info "создана база ${DB_NAME}"
     fi
 

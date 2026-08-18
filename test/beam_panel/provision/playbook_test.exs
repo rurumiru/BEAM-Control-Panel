@@ -45,6 +45,33 @@ defmodule BeamPanel.Provision.PlaybookTest do
     refute script =~ "erlang-solutions"
   end
 
+  test "never uses `$SUDO -u`, which expands to nothing when running as root" do
+    # Comments are allowed to mention the pattern; only executable lines matter.
+    executable =
+      Playbook.components()
+      |> Enum.map(& &1.key)
+      |> Playbook.render(%{})
+      |> String.split("
+")
+      |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
+      |> Enum.join("
+")
+
+    refute executable =~ "$SUDO -u",
+           """
+           Under root $SUDO is empty, so `$SUDO -u postgres psql ...` became
+           `-u: command not found` and provisioning failed. Use the `as_user`
+           helper instead.
+           """
+  end
+
+  test "defines the as_user helper whenever it is used" do
+    script = Playbook.render(["postgres"], %{})
+
+    assert script =~ "as_user postgres psql"
+    assert script =~ "as_user() {"
+  end
+
   test "generates a database password when none is supplied" do
     a = Playbook.render(["postgres"], %{})
     b = Playbook.render(["postgres"], %{})
