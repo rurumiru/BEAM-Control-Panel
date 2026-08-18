@@ -144,6 +144,7 @@ defmodule BeamPanel.Deploy.Pipeline do
 
       true ->
         clone_or_fetch = """
+        set -e
         if [ -d #{Remote.shell_quote(source)}/.git ]; then
           git -C #{Remote.shell_quote(source)} remote set-url origin #{Remote.shell_quote(project.repo_url)}
           git -C #{Remote.shell_quote(source)} fetch --all --prune --tags
@@ -194,6 +195,7 @@ defmodule BeamPanel.Deploy.Pipeline do
     source = Project.source_path(ctx.project)
 
     cmd = """
+    set -e
     if grep -q 'assets.deploy' mix.exs 2>/dev/null || [ -d assets ]; then
       mix assets.deploy || (mix assets.setup && mix assets.deploy)
     else
@@ -237,6 +239,7 @@ defmodule BeamPanel.Deploy.Pipeline do
     target = release_dir(ctx)
 
     cmd = """
+    set -e
     rebar3 as prod release
     rm -rf #{Remote.shell_quote(target)}
     mkdir -p #{Remote.shell_quote(target)}

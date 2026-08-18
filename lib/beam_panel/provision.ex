@@ -113,7 +113,9 @@ defmodule BeamPanel.Provision do
              {:ok, %{exit_status: status}} <-
                Remote.stream(
                  server,
-                 "bash #{@script_path} 2>&1; rm -f #{@script_path}",
+                 # `rc=$?` обязателен: без него статус берётся от `rm`,
+                 # и провалившийся скрипт выглядел бы как успешный.
+                 "bash #{@script_path} 2>&1; rc=$?; rm -f #{@script_path}; exit $rc",
                  fn _io, chunk ->
                    chunk
                    |> String.split(~r/\r?\n/)

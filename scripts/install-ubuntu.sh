@@ -413,12 +413,19 @@ fi
 step "Сборка релиза"
 
 BUILD_DIR="$APP_HOME/build"
-mkdir -p "$BUILD_DIR"
+RELEASE_DIR="$APP_HOME/releases/$(date -u +%Y%m%d%H%M%S)"
+
+mkdir -p "$BUILD_DIR" "$APP_HOME/releases"
+
 rsync -a --delete \
   --exclude '.git' --exclude '_build' --exclude 'deps' --exclude 'node_modules' \
   --exclude 'priv/static/assets' \
   "$SOURCE_DIR"/ "$BUILD_DIR"/
-chown -R "$APP_USER:$APP_USER" "$BUILD_DIR"
+
+# Сборка идёт от имени пользователя панели, а mix release сам создаёт подкаталоги
+# внутри releases/<версия>. Каталоги, созданные здесь под root, обязательно
+# передаём ему, иначе сборка падает на mkdir.
+chown -R "$APP_USER:$APP_USER" "$BUILD_DIR" "$APP_HOME/releases"
 
 sudo -u "$APP_USER" env \
   HOME="/home/$APP_USER" \
@@ -434,10 +441,26 @@ sudo -u "$APP_USER" env \
     mix compile
     mix assets.setup
     mix assets.deploy
-    mix release --overwrite --path '$APP_HOME/current'
+    mix release --overwrite --path '$RELEASE_DIR'
   "
 
-info "релиз собран в $APP_HOME/current"
+# Установки прежнего формата держали в current настоящий каталог. `ln -s` в
+# такой каталог создал бы ссылку ВНУТРИ него, и служба молча осталась бы на
+# старом коде — поэтому убираем его в сторону.
+if [ -e "$APP_HOME/current" ] && [ ! -L "$APP_HOME/current" ]; then
+  LEGACY_DIR="$APP_HOME/current.replaced.$(date -u +%Y%m%d%H%M%S)"
+  mv "$APP_HOME/current" "$LEGACY_DIR"
+  info "прежний каталог current сохранён как $LEGACY_DIR"
+fi
+
+ln -sfn "$RELEASE_DIR" "$APP_HOME/current"
+chown -h "$APP_USER:$APP_USER" "$APP_HOME/current"
+
+# держим последние пять релизов
+ls -1dt "$APP_HOME"/releases/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf
+
+info "релиз собран: $RELEASE_DIR"
+info "current -> $(readlink -f "$APP_HOME/current")"
 
 # ------------------------------------------------------------------- systemd
 

@@ -98,7 +98,11 @@ rsync -a --delete \
 chown -R "$APP_USER:$APP_USER" "$BUILD_DIR"
 
 NEW_RELEASE="$APP_HOME/releases/$(date -u +%Y%m%d%H%M%S)"
-mkdir -p "$(dirname "$NEW_RELEASE")"
+
+# Каталог releases/ создаётся под root, а сборка идёт от пользователя панели —
+# без chown mix release падает с "could not make directory (with -p)".
+mkdir -p "$APP_HOME/releases"
+chown "$APP_USER:$APP_USER" "$APP_HOME" "$APP_HOME/releases"
 
 sudo -u "$APP_USER" env \
   HOME="/home/$APP_USER" \
@@ -137,8 +141,18 @@ fi
 
 step "Переключение"
 PREVIOUS="$(readlink -f "$APP_HOME/current" 2>/dev/null || true)"
+
+# Если current — настоящий каталог (установка прежнего формата), `ln -s`
+# положил бы ссылку внутрь него и служба осталась бы на старом коде.
+if [ -e "$APP_HOME/current" ] && [ ! -L "$APP_HOME/current" ]; then
+  PREVIOUS="$APP_HOME/current.replaced.$(date -u +%Y%m%d%H%M%S)"
+  mv "$APP_HOME/current" "$PREVIOUS"
+  warn "current был обычным каталогом — сохранён как $PREVIOUS"
+fi
+
 ln -sfn "$NEW_RELEASE" "$APP_HOME/current"
 chown -h "$APP_USER:$APP_USER" "$APP_HOME/current"
+info "current -> $(readlink -f "$APP_HOME/current")"
 
 # `|| true`: иначе set -e прервёт скрипт до того, как мы покажем журнал и откатимся
 systemctl restart "$SERVICE_NAME" || true
