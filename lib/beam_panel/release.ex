@@ -110,6 +110,11 @@ defmodule BeamPanel.Release do
     end)
   end
 
+  @doc "Number of panel users. Used by scripts/doctor.sh to verify the install."
+  def count_users do
+    with_repo(fn -> BeamPanel.Accounts.count_users() end)
+  end
+
   @doc "Makes sure the local (main) server row exists."
   def ensure_main_server do
     with_repo(fn ->

@@ -30,6 +30,10 @@ defmodule BeamPanel.Monitor do
     if start_collectors?() do
       BeamPanel.Servers.ensure_main_server!()
 
+      # Restore recent history first, so dashboards are populated before the
+      # first poll completes — and stay populated across panel restarts.
+      Enum.each(BeamPanel.Servers.list_servers(), &warm_history/1)
+
       BeamPanel.Servers.list_monitored_servers()
       |> Enum.each(&start_server/1)
     end
@@ -41,6 +45,22 @@ defmodule BeamPanel.Monitor do
 
   defp start_collectors? do
     Application.get_env(:beam_panel, :start_collectors, true)
+  end
+
+  @doc "Loads recent samples from PostgreSQL into the in-memory ring."
+  def warm_history(server) do
+    since = DateTime.add(DateTime.utc_now(), -6, :hour)
+
+    samples =
+      server.id
+      |> BeamPanel.Servers.metric_history(since: since, limit: 720)
+      |> Enum.map(&BeamPanel.Servers.MetricSample.to_metrics/1)
+
+    Store.warm(server.id, samples)
+  rescue
+    error ->
+      Logger.debug("could not warm metrics for server #{server.id}: #{Exception.message(error)}")
+      :ok
   end
 
   @doc "Starts a collector for `server` unless one is already running."

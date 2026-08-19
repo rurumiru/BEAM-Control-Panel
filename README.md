@@ -27,6 +27,23 @@ installs the toolchain on a clean Ubuntu box, and runs the full deployment cycle
 
 ---
 
+
+---
+
+## What it looks like
+
+[![Dashboard](docs/screenshots/02-dashboard.png)](docs/SCREENSHOTS.md)
+
+The dashboard with live metrics. Sixteen more screens, each explained in
+detail: **[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)** (Russian).
+
+| | |
+|---|---|
+| [![Server](docs/screenshots/04-server-show.png)](docs/SCREENSHOTS.md#4-обзор-сервера) | [![Deployment log](docs/screenshots/10-deployment-log.png)](docs/SCREENSHOTS.md#10-журнал-деплоя) |
+| Server overview: metrics, sparklines, toolchain versions | Deployment: pipeline steps and a live log |
+| [![Provisioning](docs/screenshots/05-provision.png)](docs/SCREENSHOTS.md#5-установка-по-провижининг) | [![Projects](docs/screenshots/06-projects.png)](docs/SCREENSHOTS.md#6-проекты) |
+| One-click provisioning of a clean Ubuntu box | BEAM applications across every server |
+
 ## Quick start on a clean Ubuntu 24.04 / 26.04 server
 
 ```bash
@@ -68,6 +85,29 @@ sudo bash scripts/update.sh --pull
 It dumps the database, builds the new release alongside the old one, flips the
 symlink and **rolls back automatically** if the service fails to come up.
 
+Check the installation at any time:
+
+```bash
+sudo bash scripts/doctor.sh
+```
+
+It verifies configuration, the release and its symlink, the service and its
+autostart, the HTTP response, nginx, certificate expiry, the database and whether
+an administrator exists, passwordless sudo, backups and the panel's SSH key. The
+installer and the updater run it automatically at the end.
+
+**What keeps running without you:**
+
+* the service restarts on failure (`Restart=on-failure`);
+* migrations run on every start (`ExecStartPre`);
+* the database is dumped nightly to `/var/backups`, kept for 14 days
+  (`beam-panel-backup.timer`);
+* the Let's Encrypt certificate is renewed by certbot's timer;
+* metrics older than 14 days are pruned, stranded deployments are closed and
+  project statuses refreshed — every 15 minutes inside the panel;
+* charts survive restarts: recent metric history is restored from PostgreSQL
+  at boot.
+
 ### Docker
 
 ```bash
@@ -95,7 +135,7 @@ ssh root@node 'bash /tmp/bootstrap-node.sh'
 mix setup                # dependencies, database, assets
 mix run priv/repo/seeds.exs
 mix phx.server           # http://localhost:4000
-mix test                 # 127 tests
+mix test                 # 129 tests
 mix precommit            # warnings-as-errors compile + format + tests
 ```
 

@@ -161,6 +161,10 @@ sleep 4
 if systemctl is-active --quiet "$SERVICE_NAME"; then
   info "обновление применено: $NEW_RELEASE"
   ls -1dt "$APP_HOME"/releases/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf
+
+  if [ -f "$SCRIPT_DIR/doctor.sh" ]; then
+    bash "$SCRIPT_DIR/doctor.sh" || true
+  fi
 else
   printf '\033[1;33m!! служба не поднялась — откат\033[0m\n'
   if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then

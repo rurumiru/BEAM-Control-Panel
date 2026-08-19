@@ -35,6 +35,19 @@ defmodule BeamPanel.Monitor.Store do
     :ok
   end
 
+  @doc """
+  Replaces the ring with `samples` given oldest-first.
+
+  Called at boot to restore recent history from PostgreSQL.
+  """
+  def warm(_server_id, []), do: :ok
+
+  def warm(server_id, samples) do
+    ensure_table()
+    :ets.insert(@table, {server_id, samples |> Enum.reverse() |> Enum.take(@capacity)})
+    :ok
+  end
+
   @doc "Most recent samples, newest first."
   def get(server_id) do
     ensure_table()

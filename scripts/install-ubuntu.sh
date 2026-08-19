@@ -531,6 +531,57 @@ else
   warn "проверьте /etc/sudoers.d/90-beam-panel и что в /etc/sudoers есть #includedir /etc/sudoers.d"
 fi
 
+# ------------------------------------------------------------- автобэкап БД
+
+step "Автоматические резервные копии"
+
+cat > /usr/local/bin/beam-panel-backup <<'BACKUPEOF'
+#!/usr/bin/env bash
+# Ночной дамп базы панели. Хранится 14 дней.
+set -euo pipefail
+
+ENV_FILE=/etc/beam-panel/beam-panel.env
+DEST=/var/backups
+KEEP_DAYS=14
+
+[ -f "$ENV_FILE" ] || exit 0
+DB_URL="$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
+DB_NAME="${DB_URL##*/}"
+
+mkdir -p "$DEST"
+sudo -u postgres pg_dump "$DB_NAME" | gzip > "$DEST/beam-panel-$(date -u +%Y%m%d%H%M%S).sql.gz"
+find "$DEST" -name 'beam-panel-*.sql.gz' -mtime +$KEEP_DAYS -delete
+BACKUPEOF
+chmod 755 /usr/local/bin/beam-panel-backup
+
+cat > /etc/systemd/system/beam-panel-backup.service <<'UNITEOF'
+[Unit]
+Description=BEAM Control Panel — резервная копия базы
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/beam-panel-backup
+UNITEOF
+
+cat > /etc/systemd/system/beam-panel-backup.timer <<'TIMEREOF'
+[Unit]
+Description=Ежедневная резервная копия базы BEAM Control Panel
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMEREOF
+
+systemctl daemon-reload
+systemctl enable --now beam-panel-backup.timer >/dev/null 2>&1 || true
+info "ежедневный дамп в /var/backups, хранение 14 дней"
+
 # --------------------------------------------------------------------- start
 
 step "Запуск"
@@ -693,5 +744,11 @@ $(cat "/home/$APP_USER/.ssh/id_ed25519.pub" 2>/dev/null | sed 's/^/    /')
     sudo cat /home/${APP_USER}/.ssh/id_ed25519
 
   Обновление:      sudo bash scripts/update.sh
+  Проверка:        sudo bash scripts/doctor.sh
 
 SUMMARY
+
+# Финальная самопроверка: лучше узнать о проблеме сейчас, чем через неделю.
+if [ -f "$SOURCE_DIR/scripts/doctor.sh" ]; then
+  bash "$SOURCE_DIR/scripts/doctor.sh" || true
+fi

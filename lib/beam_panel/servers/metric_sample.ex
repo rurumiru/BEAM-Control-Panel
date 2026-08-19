@@ -34,6 +34,53 @@ defmodule BeamPanel.Servers.MetricSample do
     |> validate_required([:server_id, :recorded_at])
   end
 
+  @doc """
+  Rebuilds the in-memory metrics shape from a persisted row.
+
+  Used to warm the ETS ring at boot so charts show history immediately instead
+  of starting empty after every restart. `beam_processes` is not persisted, so
+  it comes back empty until the next live poll.
+  """
+  def to_metrics(%__MODULE__{} = sample) do
+    total = sample.mem_total || 0
+    used = sample.mem_used || 0
+    disk_total = sample.disk_total || 0
+    disk_used = sample.disk_used || 0
+
+    %{
+      cpu_percent: sample.cpu_percent || 0.0,
+      memory: %{
+        total: total,
+        used: used,
+        available: max(total - used, 0),
+        cached: 0,
+        buffers: 0,
+        swap_total: sample.swap_total || 0,
+        swap_used: sample.swap_used || 0,
+        percent: percent(used, total)
+      },
+      disk: %{
+        total: disk_total,
+        used: disk_used,
+        available: max(disk_total - disk_used, 0),
+        percent: percent(disk_used, disk_total)
+      },
+      load: %{
+        load1: sample.load1 || 0.0,
+        load5: sample.load5 || 0.0,
+        load15: sample.load15 || 0.0
+      },
+      uptime: sample.uptime || 0,
+      net: %{rx: 0, tx: 0, rx_rate: sample.net_rx || 0, tx_rate: sample.net_tx || 0},
+      process_count: sample.processes,
+      beam_processes: [],
+      recorded_at: sample.recorded_at
+    }
+  end
+
+  defp percent(_used, total) when total in [nil, 0], do: 0.0
+  defp percent(used, total), do: Float.round(used / total * 100, 1)
+
   @doc "Builds attrs from a derived metrics map."
   def from_metrics(server_id, metrics) do
     %{
